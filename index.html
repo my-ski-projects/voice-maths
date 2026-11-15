@@ -52,6 +52,14 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
 .op span.t{color:var(--mute)}
 .extra{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;color:var(--ink)}
 .note{color:var(--mute);font-size:.85rem;margin:8px 0 0}
+select{font:inherit;padding:7px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);max-width:100%}
+.rhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.rlist{list-style:none;margin:8px 0;padding:0;display:grid;gap:2px}
+.rlist li{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.rlist li span:last-child{color:var(--mute);text-align:right}
+.rlist .x{color:var(--bad)!important;font-weight:600}.rlist .ok{color:var(--ok)!important;font-weight:600}
+details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
+.extra button{padding:7px 12px;font-size:.9rem}
 </style>
 </head>
 <body>
@@ -83,8 +91,28 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
     <div><strong id="sStreak">0</strong>streak</div>
   </section>
 
+  <section class="card" id="reviewCard">
+    <div class="rhead"><strong id="rTitle">Mistakes to review</strong><span class="note" id="rStats" style="margin:0"></span></div>
+    <ul class="rlist" id="rList"></ul>
+    <div class="extra">
+      <button id="practice">Practise mistakes</button>
+      <button id="clearMist">Clear mistakes</button>
+      <button id="clearHist">Clear all history</button>
+    </div>
+    <details><summary>Recent answers</summary><ul class="rlist" id="hList"></ul></details>
+  </section>
+
   <section class="card">
     <div class="ops" id="ops"></div>
+    <div class="extra">
+      <label for="recmode">Voice recognition</label>
+      <select id="recmode">
+        <option value="browser">Browser (Chrome may use Google servers)</option>
+        <option value="offline">Offline model (private, about 40 MB download)</option>
+        <option value="none">Off (type answers)</option>
+      </select>
+    </div>
+    <p class="note" id="privNote"></p>
     <div class="extra">
       <label for="tlimit">Seconds per question</label>
       <input type="number" id="tlimit" min="5" max="120" value="30">
@@ -92,6 +120,10 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
     <div class="extra">
       <input type="checkbox" id="noneg" checked style="width:20px;height:20px;accent-color:var(--accent)">
       <label for="noneg">No negative answers in subtraction</label>
+    </div>
+    <div class="extra">
+      <button id="reset">Reset to defaults</button>
+      <span class="note" style="margin:0">Settings are saved in this browser.</span>
     </div>
     <p class="note" id="voiceNote"></p>
     <p class="note" id="recNote"></p>
@@ -102,10 +134,10 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
 <script>
 (function(){
   var OPS=[
-    {id:'add',sym:'+',say:'plus',name:'Addition',on:true,min:1,max:20},
-    {id:'sub',sym:'−',say:'minus',name:'Subtraction',on:true,min:1,max:20},
-    {id:'mul',sym:'×',say:'times',name:'Multiplication',on:false,min:1,max:10},
-    {id:'div',sym:'÷',say:'divided by',name:'Division',on:false,min:1,max:10}
+    {id:'add',sym:'+',say:'plus',name:'Addition',on:false,min:1,max:15},
+    {id:'sub',sym:'−',say:'minus',name:'Subtraction',on:true,min:1,max:15},
+    {id:'mul',sym:'×',say:'times',name:'Multiplication',on:false,min:1,max:15},
+    {id:'div',sym:'÷',say:'divided by',name:'Division',on:false,min:1,max:15}
   ];
   var $=function(id){return document.getElementById(id)};
   var T0=Date.now();
@@ -136,8 +168,111 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
   }
   function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a}
 
+  // ----- saved settings (localStorage) -----
+  var KEY='saythesum.settings.v1',DEF_TIME=30,DEF_NONEG=true,DEF_REC='browser';
+  function saveSettings(){
+    try{
+      var o={time:$('tlimit').value,noneg:$('noneg').checked,rec:$('recmode').value,ops:{}};
+      OPS.forEach(function(x){o.ops[x.id]={on:$('on_'+x.id).checked,min:$('min_'+x.id).value,max:$('max_'+x.id).value}});
+      localStorage.setItem(KEY,JSON.stringify(o));
+      log('settings saved',JSON.stringify(o));
+    }catch(e){log('could not save settings:',e)}
+  }
+  function applySettings(o){
+    OPS.forEach(function(x){
+      var v=o&&o.ops&&o.ops[x.id];
+      $('on_'+x.id).checked=v&&typeof v.on==='boolean'?v.on:x.on;
+      $('min_'+x.id).value=v&&isFinite(parseInt(v.min,10))?parseInt(v.min,10):x.min;
+      $('max_'+x.id).value=v&&isFinite(parseInt(v.max,10))?parseInt(v.max,10):x.max;
+    });
+    $('tlimit').value=o&&isFinite(parseInt(o.time,10))?parseInt(o.time,10):DEF_TIME;
+    $('noneg').checked=o&&typeof o.noneg==='boolean'?o.noneg:DEF_NONEG;
+    var rv=o&&o.rec;
+    $('recmode').value=(rv==='browser'||rv==='offline'||rv==='none')?rv:DEF_REC;
+    updatePrivacy();
+  }
+  function loadSettings(){
+    try{
+      var raw=localStorage.getItem(KEY);
+      if(raw){applySettings(JSON.parse(raw));log('settings loaded from this browser',raw)}
+      else log('no saved settings; using defaults');
+    }catch(e){log('could not load settings:',e)}
+  }
+  function resetSettings(){
+    try{localStorage.removeItem(KEY)}catch(e){}
+    applySettings(null);
+    log('settings reset to defaults');
+  }
+  loadSettings();
+  ['ops','tlimit','noneg','recmode'].forEach(function(id){
+    $(id).addEventListener('input',saveSettings);
+    $(id).addEventListener('change',saveSettings);
+  });
+  $('reset').onclick=resetSettings;
+
+  // ----- answer history & mistakes (localStorage) -----
+  var HKEY='saythesum.history.v1',hist={log:[],wrong:{},tot:{c:0,w:0}},practice=false,pendingPractice=false;
+  function loadHist(){
+    try{
+      var r=localStorage.getItem(HKEY);
+      if(r){var o=JSON.parse(r);if(o&&o.log&&o.wrong&&o.tot){hist=o;log('history loaded:',hist.tot.c,'right,',hist.tot.w,'wrong,',Object.keys(hist.wrong).length,'to review')}}
+    }catch(e){log('could not load history:',e)}
+  }
+  function saveHist(){try{localStorage.setItem(HKEY,JSON.stringify(hist))}catch(e){log('could not save history:',e)}}
+  function recordAnswer(ok,said){
+    var q=current;if(!q)return;
+    hist.log.push({q:q.text,ans:q.ans,said:said,ok:ok,t:Date.now()});
+    if(hist.log.length>300)hist.log.splice(0,hist.log.length-300);
+    if(ok){hist.tot.c++;if(hist.wrong[q.text]){delete hist.wrong[q.text];log('cleared from mistakes:',q.text)}}
+    else{
+      hist.tot.w++;
+      var w=hist.wrong[q.text]||{text:q.text,spoken:q.spoken,ans:q.ans,n:0};
+      w.n++;w.said=said;w.t=Date.now();hist.wrong[q.text]=w;
+    }
+    saveHist();renderReview();
+    log('recorded:',q.text,'=',q.ans,'| said',said,'|',ok?'right':'wrong','| mistakes to review:',Object.keys(hist.wrong).length);
+  }
+  function saidText(x){return x==='timeout'?'ran out of time':x==='skipped'?'skipped':'said '+x}
+  function li(l,r,cls){
+    var e=document.createElement('li'),a=document.createElement('span'),b=document.createElement('span');
+    a.textContent=l;b.textContent=r;if(cls)b.className=cls;e.appendChild(a);e.appendChild(b);return e;
+  }
+  function fillList(ul,items,empty){
+    ul.innerHTML='';
+    if(!items.length){ul.appendChild(li(empty,''));return}
+    items.forEach(function(x){ul.appendChild(x)});
+  }
+  function renderReview(){
+    var ws=Object.keys(hist.wrong).map(function(k){return hist.wrong[k]}).sort(function(a,b){return b.t-a.t});
+    var tot=hist.tot.c+hist.tot.w;
+    $('rTitle').textContent='Mistakes to review ('+ws.length+')';
+    $('rStats').textContent=tot?('All time: '+hist.tot.c+' right, '+hist.tot.w+' wrong ('+Math.round(100*hist.tot.c/tot)+'% right)'):'No answers recorded yet.';
+    fillList($('rList'),ws.map(function(w){return li(w.text+' = '+w.ans,saidText(w.said)+' \u00b7 wrong \u00d7'+w.n,'x')}),'Nothing to review yet.');
+    fillList($('hList'),hist.log.slice(-10).reverse().map(function(h){return li(h.q+' = '+h.ans,h.ok?'\u2713 right':'\u2717 '+saidText(h.said),h.ok?'ok':'x')}),'No answers yet.');
+    $('practice').disabled=running||!ws.length;
+  }
+  function twoStep(btn,fn){
+    var label=btn.textContent,tm=null;
+    btn.onclick=function(){
+      if(tm){clearTimeout(tm);tm=null;btn.textContent=label;fn();return}
+      btn.textContent='Click again to confirm';
+      tm=setTimeout(function(){tm=null;btn.textContent=label},4000);
+    };
+  }
+  twoStep($('clearMist'),function(){hist.wrong={};saveHist();renderReview();log('mistakes list cleared')});
+  twoStep($('clearHist'),function(){hist={log:[],wrong:{},tot:{c:0,w:0}};saveHist();renderReview();log('all history cleared')});
+  $('practice').onclick=function(){pendingPractice=true;$('start').click()};
+  loadHist();renderReview();
+
   // ----- question generation -----
   function makeQuestion(){
+    if(practice){
+      var ks=Object.keys(hist.wrong);
+      if(!ks.length)return null;
+      var pool=ks.length>1?ks.filter(function(k){return !current||k!==current.text}):ks;
+      var w=hist.wrong[pool[rnd(0,pool.length-1)]];
+      return {text:w.text,spoken:w.spoken,ans:w.ans};
+    }
     var list=cfg();if(!list.length)return null;
     var c=list[rnd(0,list.length-1)],o=c.op,a,b,ans;
     if(o.id==='add'){a=rnd(c.min,c.max);b=rnd(c.min,c.max);ans=a+b}
@@ -178,6 +313,29 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
     setTimeout(function(){if(!fired)log('speech timeout fallback (onend never fired)');fin()},9000);
   }
 
+  // ----- beep (generated locally with Web Audio) -----
+  var actx=null;
+  function initAudio(){
+    try{
+      var AC=window.AudioContext||window.webkitAudioContext;
+      if(!actx&&AC)actx=new AC();
+      if(actx&&actx.state==='suspended')actx.resume();
+    }catch(e){log('audio init failed:',e)}
+  }
+  function beep(){
+    log('beep');
+    if(!actx)return;
+    try{
+      var o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime;
+      o.type='sine';o.frequency.value=880;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(0.3,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+      o.connect(g);g.connect(actx.destination);
+      o.start(t);o.stop(t+0.25);
+    }catch(e){log('beep failed:',e)}
+  }
+
   // ----- speech to number -----
   var UNITS={zero:0,oh:0,one:1,won:1,two:2,to:2,too:2,three:3,four:4,for:4,five:5,six:6,seven:7,eight:8,ate:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19};
   var TENS={twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
@@ -206,6 +364,7 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
   // remove the spoken question if the microphone picked it up
   function stripEcho(t){
     t=t.toLowerCase();
+    t=t.replace(/\b(?:wrong|correct|skipped|time(?:'s| is) up)\b\W*(?:the )?(?:answer is (?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+(?:one|two|three|four|five|six|seven|eight|nine)|\S+))?/g,' ');
     t=t.replace(/what(?:'s| is)?\s+(?:\S+\s+){1,3}?(?:plus|minus|times|multiplied by|divided by|over|x|[-+\u00d7\u00f7*\/\u2212])\s+(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+(?:one|two|three|four|five|six|seven|eight|nine)|\S+)/g,' ');
     t=t.replace(/\b(what|what's|is|equals?|the|answer)\b/g,' ');
     return t.replace(/\s+/g,' ').trim();
@@ -213,12 +372,124 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
 
   // ----- recognition (one continuous session, on-device when the browser allows) -----
   var listening=false,lastFinal=0,ignoreBefore=0,localRec=false,pend=null;
-  function setMic(){$('mic').classList.toggle('on',listening&&!!rec)}
+  var recMode='browser'; // browser | offline | none (chosen at Start)
+  var freshSessions=location.protocol!=='file:'; // new recognition session per question (no repeated prompts off file://)
+  function setMic(){$('mic').classList.toggle('on',listening&&(!!rec||!!vRec))}
   function setRecNote(){
-    if(!SR){$('recNote').textContent='';return}
+    if(!SR||recMode!=='browser'){$('recNote').textContent='';return}
     $('recNote').textContent=localRec?'Recognition: on this device.':'Recognition: on-device mode is not available in this browser, so it may use an online service.';
   }
+  // ----- offline recognition (Vosk speech model running inside this page) -----
+  var VOSK_SRC='https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js';
+  // Put vosk-model-small-en-us-0.15.tar.gz next to this page to serve the model yourself (first entry).
+  var MODEL_URLS=['vosk-model-small-en-us-0.15.tar.gz','https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-en-us-0.15.tar.gz'];
+  var GRAMMAR=JSON.stringify(['zero','oh','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety','hundred','minus','negative','[unk]']);
+  var vModel=null,vStream=null,vCtx=null,vNode=null,vSrc=null,vRec=null;
+  function canListen(){return recMode==='offline'||(recMode==='browser'&&!!SR)}
+  function updatePrivacy(){
+    var m=$('recmode').value,t;
+    if(m==='offline')t='Privacy: answers are recognised on this device by an offline model, so your voice is not sent anywhere. The model (about 40 MB) is downloaded once from this site or the vosk-browser demo site; only the model file is downloaded, never your audio.';
+    else if(m==='none')t='Privacy: the microphone is not used. Type your answers.';
+    else t='Privacy: the browser\u2019s speech recognition is used. In Chrome this usually sends your voice to Google\u2019s servers, and it is not clear how Google keeps or uses it. If children use this app, choose the offline model or typing.';
+    $('privNote').textContent=t+' Questions are read with on-device voices only. Settings and results stay in this browser and this app sends nothing to any server.';
+  }
+  $('recmode').addEventListener('change',updatePrivacy);
+  function loadScript(src){
+    return new Promise(function(ok,fail){
+      if(window.Vosk){ok();return}
+      var el=document.createElement('script');el.src=src;el.onload=ok;
+      el.onerror=function(){fail(new Error('could not load the recognition library'))};
+      document.head.appendChild(el);
+    });
+  }
+  function pickModelUrl(){
+    var i=0;
+    function next(){
+      if(i>=MODEL_URLS.length)return Promise.reject(new Error('could not find the offline model file'));
+      var url=new URL(MODEL_URLS[i++],location.href).href;
+      return fetch(url,{method:'HEAD'}).then(function(r){
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        log('offline model source:',url);return url;
+      }).catch(function(e){log('model source unavailable:',url,e&&e.message);return next()});
+    }
+    return next();
+  }
+  function prepareOffline(){
+    var p=Promise.resolve();
+    if(!vModel){
+      p=loadScript(VOSK_SRC).then(function(){
+        $('status').textContent='Loading the offline speech model (about 40 MB, first time only)\u2026';
+        return pickModelUrl();
+      }).then(function(url){
+        return Vosk.createModel(url).catch(function(){throw new Error('the offline model could not be loaded')});
+      }).then(function(m){vModel=m;log('offline model ready')});
+    }
+    return p.then(function(){
+      if(vStream)return;
+      return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}}).then(function(st){
+        vStream=st;
+        vCtx=new (window.AudioContext||window.webkitAudioContext)();
+        if(vCtx.state==='suspended')vCtx.resume();
+        vSrc=vCtx.createMediaStreamSource(st);
+        vNode=vCtx.createScriptProcessor(4096,1,1);
+        vNode.onaudioprocess=function(e){if(vRec){try{vRec.acceptWaveform(e.inputBuffer)}catch(err){}}};
+        vSrc.connect(vNode);vNode.connect(vCtx.destination);
+        log('offline microphone open | sample rate',vCtx.sampleRate);
+      });
+    });
+  }
+  function startOffline(cb){
+    $('status').textContent='Preparing offline recognition\u2026';
+    prepareOffline().then(function(){setRecNote();cb()}).catch(function(err){
+      log('offline recognition failed:',err&&err.message||err);
+      recMode='none';
+      $('typedRow').hidden=false;
+      $('status').textContent='Offline recognition is not available ('+(err&&err.message||'unknown error')+'). Type your answers instead.';
+      cb();
+    });
+  }
+  function offlineBegin(){
+    if(!vModel||!vCtx)return;
+    offlineEnd();
+    vRec=new vModel.KaldiRecognizer(vCtx.sampleRate,GRAMMAR);
+    vRec.on('result',function(m){offlineHeard(m.result&&m.result.text,true)});
+    vRec.on('partialresult',function(m){offlineHeard(m.result&&m.result.partial,false)});
+    vRec.on('error',function(m){log('offline recognizer error:',m&&m.error)});
+    log('offline recognizer started');
+  }
+  function offlineEnd(){
+    if(vRec){try{vRec.remove()}catch(e){}vRec=null;log('offline recognizer stopped')}
+  }
+  function offlineClose(){
+    offlineEnd();
+    try{if(vNode){vNode.onaudioprocess=null;vNode.disconnect()}}catch(e){}
+    try{if(vSrc)vSrc.disconnect()}catch(e){}
+    try{if(vStream)vStream.getTracks().forEach(function(t){t.stop()})}catch(e){}
+    try{if(vCtx)vCtx.close()}catch(e){}
+    vNode=vSrc=vStream=vCtx=null;
+  }
+  function offlineHeard(text,isFinal){
+    if(!listening||!current||settled)return;
+    text=(text||'').trim();
+    if(!text)return;
+    var res=[{transcript:text,confidence:1}];res.isFinal=isFinal;
+    log('offline',isFinal?'FINAL':'partial',JSON.stringify(text));
+    var ev=evalResult(res);
+    if(!ev.heard)return;
+    $('heard').textContent='Heard: \u201c'+ev.heard+'\u201d';
+    clearTimeout(pend);
+    var id=qid;
+    if(isFinal){
+      if(ev.hit)judge(id,current.ans);
+      else if(ev.num!==null)judge(id,ev.num);
+    }else if(ev.hit){
+      pend=setTimeout(function(){if(id===qid&&listening&&!settled)judge(id,current.ans)},650);
+    }
+  }
+
   function prepareRec(cb){
+    if(recMode==='none'){log('recognition off: typing only');setRecNote();cb();return}
+    if(recMode==='offline'){startOffline(cb);return}
     if(!SR||typeof SR.available!=='function'||!('processLocally' in SR.prototype)){log(SR?'on-device recognition API not supported; using browser default':'SpeechRecognition not supported in this browser');setRecNote();cb();return}
     var opts={langs:['en-US'],processLocally:true};
     function done(ok){localRec=!!ok;log('on-device recognition:',ok?'enabled':'not used');setRecNote();cb()}
@@ -243,7 +514,7 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
     return{heard:heard,num:num,hit:false};
   }
   function ensureRec(){
-    if(!SR||rec)return;
+    if(recMode!=='browser'||!SR||rec)return;
     recWanted=true;
     try{
       var r=new SR();rec=r;
@@ -296,10 +567,30 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
       r.start();
     }catch(err){log('could not start recognition:',err);rec=null}
   }
-  function beginListen(){ignoreBefore=lastFinal;listening=true;ensureRec();setMic();log('listening ON | ignoring results before #'+ignoreBefore,'| recognition session active:',!!rec)}
-  function endListen(){if(listening)log('listening OFF');clearTimeout(pend);listening=false;setMic()}
+  function killRec(why){
+    if(!rec)return;
+    var o=rec;rec=null;
+    try{o.onend=o.onresult=o.onerror=o.onstart=null;o.abort()}catch(e){}
+    log('closed recognition session ('+why+')');
+  }
+  function beginListen(){
+    if(recMode!=='browser'){
+      listening=true;
+      if(recMode==='offline')offlineBegin();
+      setMic();
+      log('listening ON | mode:',recMode);
+      return;
+    }
+    if(freshSessions){killRec('fresh session for this question');lastFinal=0;ignoreBefore=0}
+    else ignoreBefore=lastFinal;
+    listening=true;
+    if(freshSessions)setTimeout(ensureRec,60);else ensureRec();
+    setMic();
+    log('listening ON | ignoring results before #'+ignoreBefore,'| fresh session:',freshSessions,'| session active:',!!rec);
+  }
+  function endListen(){if(listening)log('listening OFF');clearTimeout(pend);listening=false;offlineEnd();setMic()}
   function stopRec(){
-    clearTimeout(pend);recWanted=false;listening=false;setMic();
+    clearTimeout(pend);recWanted=false;listening=false;offlineClose();setMic();
     if(rec){try{rec.onend=null;rec.abort()}catch(e){}rec=null}
   }
 
@@ -325,25 +616,31 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
   function nextQuestion(){
     if(!running)return;
     var q=makeQuestion();
-    if(!q){$('status').textContent='Turn on at least one operation below.';stopAll();return}
+    if(!q){$('q').textContent=practice?'All clear!':'Ready?';$('status').textContent=practice?'No mistakes left to practise. Well done!':'Turn on at least one operation below.';stopAll();return}
     current=q;var id=++qid;
     log('new question #'+id+':',q.text,'| expected answer',q.ans);
     $('q').textContent=q.text;
     $('heard').textContent='';$('typed').value='';
-    $('status').className='status';$('status').textContent='Listen…';
+    $('status').className='status';$('status').textContent=practice?'Practising a past mistake. Listen…':'Listen…';
     $('skip').disabled=false;
     endListen();clearInterval(timerId);showTime(limit);
     speak(q.spoken,function(){
       if(id!==qid||!running)return;
-      $('status').textContent=SR?'Your turn. Say the answer.':'Type your answer and press Answer.';
-      log('question finished; starting',limit+'s timer and listening');startTimer(id);beginListen();
+      $('status').textContent=canListen()?'Say your answer after the beep.':'Type your answer and press Answer.';
+      setTimeout(function(){
+        if(id!==qid||!running)return;
+        log('question finished; beep, then timer and listening');
+        beep();startTimer(id);beginListen();
+        $('status').textContent=canListen()?'Listening… say your answer now.':'Type your answer and press Answer.';
+      },250);
     });
   }
   var settled=false;
-  function finish(id,ok,msg,spoken){
+  function finish(id,ok,msg,spoken,said){
     if(id!==qid||!running||settled)return;
     settled=true;
     log('outcome:',msg);
+    recordAnswer(ok,said);
     clearInterval(timerId);endListen();
     if(ok){score.c++;score.s++}else{score.w++;score.s=0}
     updateScore();
@@ -354,28 +651,32 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
   }
   function judge(id,n){
     log('judge: heard',n,'| expected',current&&current.ans,'|',current&&n===current.ans?'CORRECT':'WRONG');
-    if(n===current.ans)finish(id,true,'Correct! '+current.text+' = '+current.ans,'Correct!');
-    else finish(id,false,'Wrong. The answer is '+current.ans,'Wrong. The answer is '+current.ans);
+    if(n===current.ans)finish(id,true,'Correct! '+current.text+' = '+current.ans,'Correct!',n);
+    else finish(id,false,'Wrong. The answer is '+current.ans,'Wrong. The answer is '+current.ans,n);
   }
-  function timeUp(id){log('time is up');finish(id,false,'Time’s up. The answer is '+current.ans,'Time is up. The answer is '+current.ans)}
+  function timeUp(id){log('time is up');finish(id,false,'Time’s up. The answer is '+current.ans,'Time is up. The answer is '+current.ans,'timeout')}
   function updateScore(){$('sCorrect').textContent=score.c;$('sWrong').textContent=score.w;$('sStreak').textContent=score.s}
   function stopAll(){
     log('stopping everything');
-    running=false;qid++;settled=false;clearInterval(timerId);stopRec();if(synth)synth.cancel();
+    practice=false;running=false;qid++;settled=false;clearInterval(timerId);stopRec();if(synth)synth.cancel();
     $('start').disabled=false;$('start').textContent='Start';$('skip').disabled=true;$('stop').disabled=true;
+    renderReview();
   }
 
   $('start').onclick=function(){
+    practice=pendingPractice;pendingPractice=false;
+    recMode=$('recmode').value;
     limit=Math.min(120,Math.max(5,parseInt($('tlimit').value,10)||30));
     score={c:0,w:0,s:0};updateScore();
-    running=true;settled=false;refreshVoice();
+    running=true;settled=false;refreshVoice();initAudio();
     log('Start pressed | seconds per question:',limit,'| operations:',JSON.stringify(cfg().map(function(c){return c.op.name+' '+c.min+'-'+c.max})),'| no negatives:',$('noneg').checked);
-    $('start').disabled=true;$('stop').disabled=false;
+    $('start').disabled=true;$('stop').disabled=false;renderReview();
+    log(practice?'PRACTICE mode: asking saved mistakes':'normal mode');
     $('typedRow').hidden=false;
     prepareRec(function(){if(!running)return;ensureRec();nextQuestion()});
   };
   $('stop').onclick=function(){log('Stop pressed');stopAll();$('q').textContent='Stopped';$('status').className='status';$('status').textContent='Score: '+score.c+' correct, '+score.w+' wrong.';showTime(limit)};
-  $('skip').onclick=function(){log('Skip pressed');if(running&&current&&!settled)finish(qid,false,'Skipped. The answer is '+current.ans,'The answer is '+current.ans)};
+  $('skip').onclick=function(){log('Skip pressed');if(running&&current&&!settled)finish(qid,false,'Skipped. The answer is '+current.ans,'The answer is '+current.ans,'skipped')};
   $('submitTyped').onclick=function(){
     var v=parseInt($('typed').value,10);
     log('typed answer:',v);
@@ -386,7 +687,8 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
   $('support').textContent=(!synth?'Speech synthesis is not supported in this browser. ':'')+(!SR?'Speech recognition is not supported here, so type your answers. ':'Voice answers work best in recent Chrome or Edge. ')+'If Chrome keeps asking for the microphone when you open this as a local file, run python3 -m http.server in its folder and open http://localhost:8000.';
   if(!SR)$('typedRow').hidden=false;
   if(synth)refreshVoice();
-  log('ready | speechSynthesis:',!!synth,'| speechRecognition:',!!SR,'| secure context:',window.isSecureContext,'| protocol:',location.protocol,'| filter this console by "SayTheSum"');
+  updatePrivacy();
+  log('ready | speechSynthesis:',!!synth,'| speechRecognition:',!!SR,'| secure context:',window.isSecureContext,'| protocol:',location.protocol,'| fresh recognition session per question:',freshSessions,'| filter this console by "SayTheSum"');
   try{navigator.permissions.query({name:'microphone'}).then(function(pm){log('microphone permission:',pm.state);pm.onchange=function(){log('microphone permission changed:',pm.state)}}).catch(function(){})}catch(e){}
 })();
 </script>
