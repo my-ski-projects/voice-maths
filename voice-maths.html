@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Say the Sum</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eaf3fb;--grid:#c9dcee;--ink:#1d2b3a;--mute:#5a6b7c;--card:#ffffff;--line:#b7cde2;--accent:#e8504a;--ok:#1f9d55;--bad:#d6402f;--ring:#2f7fd1;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#14202c;--grid:#1e3043;--ink:#e8f0f8;--mute:#9db0c3;--card:#1b2b3b;--line:#34506b;--accent:#ff7a72;--ok:#4cd08a;--bad:#ff7d6e;--ring:#6aaeff}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#14202c;--grid:#1e3043;--ink:#e8f0f8;--mute:#9db0c3;--card:#1b2b3b;--line:#34506b;--accent:#ff7a72;--ok:#4cd08a;--bad:#ff7d6e;--ring:#6aaeff}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;font-family:"Fredoka",system-ui,"Segoe UI",sans-serif;color:var(--ink);background-color:var(--bg);
+background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:28px 28px;display:flex;justify-content:center;padding:20px 14px}
+main{width:100%;max-width:520px;display:flex;flex-direction:column;gap:16px}
+h1{margin:0;font-size:1.6rem;font-weight:700}
+.sub{margin:2px 0 0;color:var(--mute);font-size:.95rem}
+.card{background:var(--card);border:2px solid var(--line);border-radius:18px;padding:16px}
+.stage{text-align:center;padding:22px 16px}
+.q{font-size:clamp(3rem,16vw,5.2rem);font-weight:700;letter-spacing:.02em;margin:6px 0;min-height:1.2em}
+.status{min-height:1.6em;color:var(--mute);font-size:1.05rem}
+.status.ok{color:var(--ok);font-weight:600}.status.bad{color:var(--bad);font-weight:600}
+.heard{min-height:1.4em;color:var(--mute);font-size:.95rem}
+.timer{position:relative;width:96px;height:96px;margin:6px auto}
+.timer svg{transform:rotate(-90deg)}
+.timer circle{fill:none;stroke-width:9}
+.timer .bg{stroke:var(--line)}
+.timer .fg{stroke:var(--ring);stroke-linecap:round;transition:stroke-dashoffset .25s linear,stroke .3s}
+.timer.low .fg{stroke:var(--bad)}
+.timer b{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1.9rem}
+.mic{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--line);margin-right:8px}
+.mic.on{background:var(--bad);animation:pulse 1s infinite}
+@keyframes pulse{50%{transform:scale(1.5);opacity:.6}}
+@media (prefers-reduced-motion:reduce){.mic.on{animation:none}.timer .fg{transition:none}}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:10px}
+button{font:inherit;font-weight:600;border:2px solid var(--ink);background:var(--card);color:var(--ink);border-radius:12px;padding:10px 18px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-size:1.15rem;padding:12px 26px}
+button:focus-visible,input:focus-visible{outline:3px solid var(--ring);outline-offset:2px}
+button:disabled{opacity:.5;cursor:not-allowed}
+.typed{display:flex;gap:8px;justify-content:center;margin-top:10px}
+.typed input{width:120px;text-align:center}
+input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+.score{display:flex;justify-content:space-around;text-align:center}
+.score div{font-size:.9rem;color:var(--mute)}.score strong{display:block;font-size:1.7rem;color:var(--ink)}
+.ops{display:grid;gap:10px}
+.op{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-bottom:1px dashed var(--line)}
+.op:last-of-type{border-bottom:0}
+.op label.name{display:flex;align-items:center;gap:8px;min-width:130px;font-weight:600}
+.op input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
+.op span.t{color:var(--mute)}
+.extra{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;color:var(--ink)}
+.note{color:var(--mute);font-size:.85rem;margin:8px 0 0}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Say the Sum</h1>
+    <p class="sub">Listen to the question, say the answer out loud.</p>
+  </header>
+
+  <section class="card stage" aria-live="polite">
+    <div class="timer" id="timer"><svg width="96" height="96" viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="42"/><circle class="fg" id="fg" cx="48" cy="48" r="42" stroke-dasharray="264" stroke-dashoffset="0"/></svg><b id="secs">30</b></div>
+    <div class="q" id="q">Ready?</div>
+    <div class="status" id="status">Press Start. Your browser will ask to use the microphone.</div>
+    <div class="heard"><span class="mic" id="mic"></span><span id="heard"></span></div>
+    <div class="typed" id="typedRow" hidden>
+      <input id="typed" type="number" inputmode="numeric" aria-label="Type your answer">
+      <button id="submitTyped">Answer</button>
+    </div>
+    <div class="row">
+      <button class="primary" id="start">Start</button>
+      <button id="skip" disabled>Skip</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+  </section>
+
+  <section class="card score">
+    <div><strong id="sCorrect">0</strong>correct</div>
+    <div><strong id="sWrong">0</strong>wrong</div>
+    <div><strong id="sStreak">0</strong>streak</div>
+  </section>
+
+  <section class="card">
+    <div class="ops" id="ops"></div>
+    <div class="extra">
+      <label for="tlimit">Seconds per question</label>
+      <input type="number" id="tlimit" min="5" max="120" value="30">
+    </div>
+    <div class="extra">
+      <input type="checkbox" id="noneg" checked style="width:20px;height:20px;accent-color:var(--accent)">
+      <label for="noneg">No negative answers in subtraction</label>
+    </div>
+    <p class="note" id="voiceNote"></p>
+    <p class="note" id="recNote"></p>
+    <p class="note" id="support"></p>
+  </section>
+</main>
+
+<script>
+(function(){
+  var OPS=[
+    {id:'add',sym:'+',say:'plus',name:'Addition',on:true,min:1,max:20},
+    {id:'sub',sym:'−',say:'minus',name:'Subtraction',on:true,min:1,max:20},
+    {id:'mul',sym:'×',say:'times',name:'Multiplication',on:false,min:1,max:10},
+    {id:'div',sym:'÷',say:'divided by',name:'Division',on:false,min:1,max:10}
+  ];
+  var $=function(id){return document.getElementById(id)};
+  var T0=Date.now();
+  function log(){var a=['[SayTheSum +'+((Date.now()-T0)/1000).toFixed(2)+'s]'].concat([].slice.call(arguments));console.log.apply(console,a)}
+  var synth=window.speechSynthesis;
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  var running=false,qid=0,current=null,timerId=null,deadline=0,rec=null,recWanted=false,limit=30;
+  var score={c:0,w:0,s:0};
+
+  // ----- settings UI -----
+  var opsBox=$('ops');
+  OPS.forEach(function(o){
+    var d=document.createElement('div');d.className='op';
+    d.innerHTML='<label class="name"><input type="checkbox" id="on_'+o.id+'"'+(o.on?' checked':'')+'> '+o.sym+' '+o.name+'</label>'+
+      '<span class="t">numbers from</span><input type="number" id="min_'+o.id+'" value="'+o.min+'" aria-label="'+o.name+' minimum">'+
+      '<span class="t">to</span><input type="number" id="max_'+o.id+'" value="'+o.max+'" aria-label="'+o.name+' maximum">';
+    opsBox.appendChild(d);
+  });
+  function cfg(){
+    var list=[];
+    OPS.forEach(function(o){
+      if(!$('on_'+o.id).checked)return;
+      var a=parseInt($('min_'+o.id).value,10),b=parseInt($('max_'+o.id).value,10);
+      if(isNaN(a))a=1;if(isNaN(b))b=a;if(a>b){var t=a;a=b;b=t}
+      list.push({op:o,min:a,max:b});
+    });
+    return list;
+  }
+  function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a}
+
+  // ----- question generation -----
+  function makeQuestion(){
+    var list=cfg();if(!list.length)return null;
+    var c=list[rnd(0,list.length-1)],o=c.op,a,b,ans;
+    if(o.id==='add'){a=rnd(c.min,c.max);b=rnd(c.min,c.max);ans=a+b}
+    else if(o.id==='sub'){a=rnd(c.min,c.max);b=rnd(c.min,c.max);
+      if($('noneg').checked&&b>a){var t=a;a=b;b=t}ans=a-b}
+    else if(o.id==='mul'){a=rnd(c.min,c.max);b=rnd(c.min,c.max);ans=a*b}
+    else{b=rnd(Math.max(c.min,1),Math.max(c.max,1));ans=rnd(c.min,c.max);a=b*ans}
+    return {text:a+' '+o.sym+' '+b,spoken:'What is '+a+' '+o.say+' '+b+'?',ans:ans};
+  }
+
+  // ----- speech output (on-device voices only) -----
+  var voice=null;
+  function pickVoice(){
+    if(!synth)return null;
+    var en=synth.getVoices().filter(function(v){return v.localService&&/^en/i.test(v.lang)});
+    for(var i=0;i<en.length;i++)if(/en[-_]US/i.test(en[i].lang))return en[i];
+    return en[0]||null;
+  }
+  function refreshVoice(){
+    voice=pickVoice();
+    log('voices: total',synth?synth.getVoices().length:0,'| on-device',synth?synth.getVoices().filter(function(v){return v.localService}).length:0,'| chosen:',voice?voice.name+' ('+voice.lang+')':'none');
+    $('voiceNote').textContent=voice?('Voice: '+voice.name+' (on this device).'):'No on-device English voice found, so questions are shown but not spoken. Install an English voice in your system settings.';
+  }
+  if(synth)synth.onvoiceschanged=refreshVoice;
+  function speak(text,done){
+    var fired=false;function fin(){if(fired)return;fired=true;done()}
+    if(!synth||!voice){log('speech skipped (no on-device voice):',JSON.stringify(text));setTimeout(fin,700);return}
+    log('speaking:',JSON.stringify(text),'| voice:',voice.name);
+    synth.cancel();
+    setTimeout(function(){
+      var u=new SpeechSynthesisUtterance(text);
+      u.voice=voice;u.lang=voice.lang;u.rate=0.95;
+      u.onstart=function(){log('speech started')};
+      u.onend=function(){log('speech ended');fin()};
+      u.onerror=function(ev){log('speech error:',ev.error);fin()};
+      synth.speak(u);
+    },60);
+    setTimeout(function(){if(!fired)log('speech timeout fallback (onend never fired)');fin()},9000);
+  }
+
+  // ----- speech to number -----
+  var UNITS={zero:0,oh:0,one:1,won:1,two:2,to:2,too:2,three:3,four:4,for:4,five:5,six:6,seven:7,eight:8,ate:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19};
+  var TENS={twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
+  var HOMO={oh:1,won:1,to:1,too:1,for:1,ate:1};
+  function parseNumber(text){
+    text=text.toLowerCase().replace(/(^|\s)[-\u2212](?=\d)/g,' minus ').replace(/-/g,' ').replace(/[,.?!]/g,' ');
+    var w=text.split(/\s+/).filter(Boolean),strict=w.length>2,out=null,neg=false,base=null;
+    for(var i=0;i<w.length;i++){
+      var x=w[i],v=null;
+      if(x==='minus'||x==='negative'){neg=true;continue}
+      if(/^\d+$/.test(x))v=parseInt(x,10);
+      else if(x in TENS){
+        v=TENS[x];var nx=w[i+1];
+        if(nx&&(nx in UNITS)&&UNITS[nx]>0&&UNITS[nx]<10&&!(HOMO[nx]&&strict)){v+=UNITS[nx];i++}
+      }
+      else if(x in UNITS){if(HOMO[x]&&strict)continue;v=UNITS[x]}
+      else if(x==='hundred'){base=(out===null?1:Math.abs(out))*100;out=base;continue}
+      if(v!==null){
+        if(base!==null&&v<100){v=base+v}
+        base=null;
+        out=neg?-v:v;neg=false;
+      }
+    }
+    return out;
+  }
+  // remove the spoken question if the microphone picked it up
+  function stripEcho(t){
+    t=t.toLowerCase();
+    t=t.replace(/what(?:'s| is)?\s+(?:\S+\s+){1,3}?(?:plus|minus|times|multiplied by|divided by|over|x|[-+\u00d7\u00f7*\/\u2212])\s+(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+(?:one|two|three|four|five|six|seven|eight|nine)|\S+)/g,' ');
+    t=t.replace(/\b(what|what's|is|equals?|the|answer)\b/g,' ');
+    return t.replace(/\s+/g,' ').trim();
+  }
+
+  // ----- recognition (one continuous session, on-device when the browser allows) -----
+  var listening=false,lastFinal=0,ignoreBefore=0,localRec=false,pend=null;
+  function setMic(){$('mic').classList.toggle('on',listening&&!!rec)}
+  function setRecNote(){
+    if(!SR){$('recNote').textContent='';return}
+    $('recNote').textContent=localRec?'Recognition: on this device.':'Recognition: on-device mode is not available in this browser, so it may use an online service.';
+  }
+  function prepareRec(cb){
+    if(!SR||typeof SR.available!=='function'||!('processLocally' in SR.prototype)){log(SR?'on-device recognition API not supported; using browser default':'SpeechRecognition not supported in this browser');setRecNote();cb();return}
+    var opts={langs:['en-US'],processLocally:true};
+    function done(ok){localRec=!!ok;log('on-device recognition:',ok?'enabled':'not used');setRecNote();cb()}
+    SR.available(opts).then(function(st){
+      log('on-device recognition availability:',st);
+      if(st==='available')done(true);
+      else if(st==='downloadable'||st==='downloading'){
+        $('status').textContent='Downloading the on-device speech model…';
+        SR.install(opts).then(done).catch(function(){done(false)});
+      }else done(false);
+    }).catch(function(){done(false)});
+  }
+  function evalResult(res){
+    var heard='',num=null;
+    for(var k=0;k<res.length;k++){
+      var t=stripEcho(res[k].transcript),n=parseNumber(t);
+      log('  alt',k,JSON.stringify(res[k].transcript),'conf',(res[k].confidence||0).toFixed(2),'| cleaned',JSON.stringify(t),'| number',n);
+      if(!heard)heard=t;
+      if(n!==null&&n===current.ans)return{heard:t,num:n,hit:true};
+      if(num===null&&n!==null)num=n;
+    }
+    return{heard:heard,num:num,hit:false};
+  }
+  function ensureRec(){
+    if(!SR||rec)return;
+    recWanted=true;
+    try{
+      var r=new SR();rec=r;
+      r.lang='en-US';r.interimResults=true;r.maxAlternatives=3;r.continuous=true;
+      if(localRec){try{r.processLocally=true}catch(e){}}
+      r.onstart=function(){lastFinal=0;ignoreBefore=0;setMic();log('recognition session started | processLocally:',r.processLocally,'| lang',r.lang)};
+      r.onaudiostart=function(){log('mic audio capture started')};
+      r.onaudioend=function(){log('mic audio capture ended')};
+      r.onspeechstart=function(){log('speech detected')};
+      r.onspeechend=function(){log('speech stopped')};
+      r.onnomatch=function(){log('recognition: no match')};
+      r.onresult=function(e){
+        for(var i=e.resultIndex;i<e.results.length;i++){
+          var res=e.results[i];
+          if(res.isFinal)lastFinal=i+1;
+          if(!listening||!current||settled||i<ignoreBefore){
+            log('ignored result #'+i,res.isFinal?'final':'interim',JSON.stringify(res[0].transcript),'(listening='+listening+', settled='+settled+', ignoreBefore='+ignoreBefore+')');
+            continue;
+          }
+          log('result #'+i,res.isFinal?'FINAL':'interim');
+          var ev=evalResult(res);
+          if(!ev.heard){log('  nothing left after removing the spoken question; waiting');continue}
+          $('heard').textContent='Heard: \u201c'+ev.heard+'\u201d';
+          clearTimeout(pend);
+          var id=qid;
+          if(res.isFinal){
+            if(ev.hit)judge(id,current.ans);
+            else if(ev.num!==null)judge(id,ev.num);
+          }else if(ev.hit){
+            pend=setTimeout(function(){if(id===qid&&listening&&!settled)judge(id,current.ans)},650);
+          }
+        }
+      };
+      r.onerror=function(e){
+        log('recognition ERROR:',e.error,e.message||'');
+        if(e.error==='not-allowed'||e.error==='service-not-allowed'){
+          recWanted=false;listening=false;setMic();
+          $('status').textContent='Microphone blocked. Type your answer below instead.';
+          $('typedRow').hidden=false;
+        }else if(e.error==='language-not-supported'&&localRec){
+          localRec=false;setRecNote();
+        }
+      };
+      r.onend=function(){
+        rec=null;setMic();
+        log('recognition session ended',recWanted&&running?'(restarting)':'(not restarting)');
+        if(recWanted&&running)setTimeout(ensureRec,30);
+      };
+      log('starting recognition session…');
+      r.start();
+    }catch(err){log('could not start recognition:',err);rec=null}
+  }
+  function beginListen(){ignoreBefore=lastFinal;listening=true;ensureRec();setMic();log('listening ON | ignoring results before #'+ignoreBefore,'| recognition session active:',!!rec)}
+  function endListen(){if(listening)log('listening OFF');clearTimeout(pend);listening=false;setMic()}
+  function stopRec(){
+    clearTimeout(pend);recWanted=false;listening=false;setMic();
+    if(rec){try{rec.onend=null;rec.abort()}catch(e){}rec=null}
+  }
+
+  // ----- timer -----
+  function startTimer(id){
+    deadline=Date.now()+limit*1000;
+    clearInterval(timerId);
+    timerId=setInterval(function(){
+      if(id!==qid){clearInterval(timerId);return}
+      var left=Math.max(0,(deadline-Date.now())/1000);
+      showTime(left);
+      if(left<=0){clearInterval(timerId);timeUp(id)}
+    },200);
+    showTime(limit);
+  }
+  function showTime(left){
+    $('secs').textContent=Math.ceil(left);
+    $('fg').style.strokeDashoffset=264*(1-left/limit);
+    $('timer').classList.toggle('low',left<=5);
+  }
+
+  // ----- game flow -----
+  function nextQuestion(){
+    if(!running)return;
+    var q=makeQuestion();
+    if(!q){$('status').textContent='Turn on at least one operation below.';stopAll();return}
+    current=q;var id=++qid;
+    log('new question #'+id+':',q.text,'| expected answer',q.ans);
+    $('q').textContent=q.text;
+    $('heard').textContent='';$('typed').value='';
+    $('status').className='status';$('status').textContent='Listen…';
+    $('skip').disabled=false;
+    endListen();clearInterval(timerId);showTime(limit);
+    speak(q.spoken,function(){
+      if(id!==qid||!running)return;
+      $('status').textContent=SR?'Your turn. Say the answer.':'Type your answer and press Answer.';
+      log('question finished; starting',limit+'s timer and listening');startTimer(id);beginListen();
+    });
+  }
+  var settled=false;
+  function finish(id,ok,msg,spoken){
+    if(id!==qid||!running||settled)return;
+    settled=true;
+    log('outcome:',msg);
+    clearInterval(timerId);endListen();
+    if(ok){score.c++;score.s++}else{score.w++;score.s=0}
+    updateScore();
+    log('score: correct',score.c,'wrong',score.w,'streak',score.s);
+    $('status').className='status '+(ok?'ok':'bad');
+    $('status').textContent=msg;
+    speak(spoken,function(){settled=false;if(running)setTimeout(nextQuestion,500)});
+  }
+  function judge(id,n){
+    log('judge: heard',n,'| expected',current&&current.ans,'|',current&&n===current.ans?'CORRECT':'WRONG');
+    if(n===current.ans)finish(id,true,'Correct! '+current.text+' = '+current.ans,'Correct!');
+    else finish(id,false,'Wrong. The answer is '+current.ans,'Wrong. The answer is '+current.ans);
+  }
+  function timeUp(id){log('time is up');finish(id,false,'Time’s up. The answer is '+current.ans,'Time is up. The answer is '+current.ans)}
+  function updateScore(){$('sCorrect').textContent=score.c;$('sWrong').textContent=score.w;$('sStreak').textContent=score.s}
+  function stopAll(){
+    log('stopping everything');
+    running=false;qid++;settled=false;clearInterval(timerId);stopRec();if(synth)synth.cancel();
+    $('start').disabled=false;$('start').textContent='Start';$('skip').disabled=true;$('stop').disabled=true;
+  }
+
+  $('start').onclick=function(){
+    limit=Math.min(120,Math.max(5,parseInt($('tlimit').value,10)||30));
+    score={c:0,w:0,s:0};updateScore();
+    running=true;settled=false;refreshVoice();
+    log('Start pressed | seconds per question:',limit,'| operations:',JSON.stringify(cfg().map(function(c){return c.op.name+' '+c.min+'-'+c.max})),'| no negatives:',$('noneg').checked);
+    $('start').disabled=true;$('stop').disabled=false;
+    $('typedRow').hidden=false;
+    prepareRec(function(){if(!running)return;ensureRec();nextQuestion()});
+  };
+  $('stop').onclick=function(){log('Stop pressed');stopAll();$('q').textContent='Stopped';$('status').className='status';$('status').textContent='Score: '+score.c+' correct, '+score.w+' wrong.';showTime(limit)};
+  $('skip').onclick=function(){log('Skip pressed');if(running&&current&&!settled)finish(qid,false,'Skipped. The answer is '+current.ans,'The answer is '+current.ans)};
+  $('submitTyped').onclick=function(){
+    var v=parseInt($('typed').value,10);
+    log('typed answer:',v);
+    if(running&&current&&!isNaN(v)&&!settled)judge(qid,v);
+  };
+  $('typed').addEventListener('keydown',function(e){if(e.key==='Enter')$('submitTyped').click()});
+
+  $('support').textContent=(!synth?'Speech synthesis is not supported in this browser. ':'')+(!SR?'Speech recognition is not supported here, so type your answers. ':'Voice answers work best in recent Chrome or Edge. ')+'If Chrome keeps asking for the microphone when you open this as a local file, run python3 -m http.server in its folder and open http://localhost:8000.';
+  if(!SR)$('typedRow').hidden=false;
+  if(synth)refreshVoice();
+  log('ready | speechSynthesis:',!!synth,'| speechRecognition:',!!SR,'| secure context:',window.isSecureContext,'| protocol:',location.protocol,'| filter this console by "SayTheSum"');
+  try{navigator.permissions.query({name:'microphone'}).then(function(pm){log('microphone permission:',pm.state);pm.onchange=function(){log('microphone permission changed:',pm.state)}}).catch(function(){})}catch(e){}
+})();
+</script>
+</body>
+</html>
