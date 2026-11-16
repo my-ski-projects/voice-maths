@@ -5,13 +5,54 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Say the Sum</title>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet">
+<!--
+  SAY THE SUM - a voice maths quiz in ONE html file (no build step, no server, no framework).
+
+  FILE MAP (search for these markers):
+    1. STYLE block   CSS. Colours are CSS variables on :root; each theme overrides them via [data-theme="..."].
+    2. BODY          HTML: header (theme picker), stage card (timer, question, status, buttons),
+                 score card, mistakes card, settings card (operations + collapsed "Advanced options").
+    3. SCRIPT block  All logic, in one function, in this order:
+                 settings UI > saved settings > history and mistakes > question generation >
+                 speech output > beep > speech-to-number > recognition (browser) >
+                 offline recognition (Vosk) > timer > game flow > start-up.
+
+  GAME FLOW (the heart of the app):
+    Start button > prepareRec() > nextQuestion() > speak(question) > 250 ms pause >
+    beep + startTimer + beginListen > a spoken or typed answer arrives > judge() >
+    finish() records the result and speaks feedback > nextQuestion() again.
+
+  STORAGE (localStorage, this browser only):
+    saythesum.settings.v1   settings (operations, ranges, seconds, streak length, recognition mode, theme)
+    saythesum.history.v1    answer history, all-time totals and the list of mistakes
+
+  HOW TO ADD THINGS:
+    New operation   add an entry to OPS, then add a branch for it in makeQuestion().
+    New theme       add a [data-theme="name"] CSS block, an <option> in the theme select, and the name in THEMES.
+    New setting     add the HTML control, then saveSettings(), applySettings(), a DEF_ default,
+                    and put the control id in the list that calls saveSettings on input/change.
+    Praise phrases  edit PRAISE.   Offline model location: MODEL_URLS.   Library version: VOSK_SRC.
+
+  DEBUGGING: open the browser console and filter by SayTheSum. Every step of the flow is logged.
+-->
 <style>
+/* THEMES: every colour used by the page is a variable defined here (default = "Notebook" light theme). */
+/* --bg page background, --grid notebook grid lines, --ink text, --mute secondary text, --card panels, */
+/* --line borders, --accent main button, --ok correct, --bad wrong, --ring timer ring. */
 :root{--bg:#eaf3fb;--grid:#c9dcee;--ink:#1d2b3a;--mute:#5a6b7c;--card:#ffffff;--line:#b7cde2;--accent:#e8504a;--ok:#1f9d55;--bad:#d6402f;--ring:#2f7fd1;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+/* "Auto" theme: follow the device dark mode when no explicit theme is chosen. */
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#14202c;--grid:#1e3043;--ink:#e8f0f8;--mute:#9db0c3;--card:#1b2b3b;--line:#34506b;--accent:#ff7a72;--ok:#4cd08a;--bad:#ff7d6e;--ring:#6aaeff}}
+/* Explicit themes. They are applied by setting data-theme on the <html> element (see applyTheme in the script). */
+/* To add a theme, copy one of these blocks, change the colours and add it to the theme <select> and THEMES array. */
 :root[data-theme="dark"]{color-scheme:dark;--bg:#14202c;--grid:#1e3043;--ink:#e8f0f8;--mute:#9db0c3;--card:#1b2b3b;--line:#34506b;--accent:#ff7a72;--ok:#4cd08a;--bad:#ff7d6e;--ring:#6aaeff}
+:root[data-theme="forest"]{color-scheme:light;--bg:#e7f1e4;--grid:#cfe3c8;--ink:#1f3320;--mute:#55705a;--card:#fbfff9;--line:#aecaa6;--accent:#2f8f4e;--ok:#1b7a3d;--bad:#c2412d;--ring:#3a8f62}
+:root[data-theme="sunset"]{color-scheme:light;--bg:#fff1e3;--grid:#f7d9bd;--ink:#3a2418;--mute:#86624e;--card:#fffaf5;--line:#efc4a2;--accent:#e8622c;--ok:#2a8a4a;--bad:#c2342a;--ring:#d9822b}
+:root[data-theme="candy"]{color-scheme:light;--bg:#fdeaf4;--grid:#f7cde4;--ink:#3b1f39;--mute:#8a5c86;--card:#fff8fc;--line:#eeb4d6;--accent:#d6409f;--ok:#1f9d6b;--bad:#d63b4a;--ring:#8a5cf0}
+:root[data-theme="night"]{color-scheme:dark;--bg:#0f1226;--grid:#1a1f3d;--ink:#eaeaff;--mute:#9aa0d6;--card:#181c38;--line:#343b78;--accent:#ff5fa2;--ok:#4be0a0;--bad:#ff7a7a;--ring:#7aa2ff}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
+/* Page background is a notebook-style grid drawn with two gradients. */
 body{margin:0;min-height:100vh;font-family:"Fredoka",system-ui,"Segoe UI",sans-serif;color:var(--ink);background-color:var(--bg);
 background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:28px 28px;display:flex;justify-content:center;padding:20px 14px}
 main{width:100%;max-width:520px;display:flex;flex-direction:column;gap:16px}
@@ -19,10 +60,13 @@ h1{margin:0;font-size:1.6rem;font-weight:700}
 .sub{margin:2px 0 0;color:var(--mute);font-size:.95rem}
 .card{background:var(--card);border:2px solid var(--line);border-radius:18px;padding:16px}
 .stage{text-align:center;padding:22px 16px}
+/* The big question text (e.g. "10 - 2"). */
 .q{font-size:clamp(3rem,16vw,5.2rem);font-weight:700;letter-spacing:.02em;margin:6px 0;min-height:1.2em}
-.status{min-height:1.6em;color:var(--mute);font-size:1.05rem}
-.status.ok{color:var(--ok);font-weight:600}.status.bad{color:var(--bad);font-weight:600}
+/* Status line under the question. .ok / .bad are added by finish() and show the large result text. */
+.status{min-height:2.4em;color:var(--mute);font-size:1.05rem;transition:font-size .15s}
+.status.ok,.status.bad{font-size:clamp(1.6rem,7vw,2.3rem);font-weight:700;line-height:1.2}.status.ok{color:var(--ok)}.status.bad{color:var(--bad)}
 .heard{min-height:1.4em;color:var(--mute);font-size:.95rem}
+/* Circular countdown timer: the ring is an SVG circle whose dashoffset is updated in showTime(). */
 .timer{position:relative;width:96px;height:96px;margin:6px auto}
 .timer svg{transform:rotate(-90deg)}
 .timer circle{fill:none;stroke-width:9}
@@ -30,6 +74,7 @@ h1{margin:0;font-size:1.6rem;font-weight:700}
 .timer .fg{stroke:var(--ring);stroke-linecap:round;transition:stroke-dashoffset .25s linear,stroke .3s}
 .timer.low .fg{stroke:var(--bad)}
 .timer b{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1.9rem}
+/* Small dot that pulses red while the microphone is listening (class "on" is toggled by setMic()). */
 .mic{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--line);margin-right:8px}
 .mic.on{background:var(--bad);animation:pulse 1s infinite}
 @keyframes pulse{50%{transform:scale(1.5);opacity:.6}}
@@ -52,7 +97,12 @@ input[type=number]{font:inherit;width:70px;padding:7px;border:2px solid var(--li
 .op span.t{color:var(--mute)}
 .extra{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;color:var(--ink)}
 .note{color:var(--mute);font-size:.85rem;margin:8px 0 0}
+/* Layout pieces: header, theme picker, advanced section, form controls. */
+header.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.themepick{font-size:.8rem;color:var(--mute);display:flex;flex-direction:column;gap:2px}
+#adv summary{font-weight:600;color:var(--ink)}
 select{font:inherit;padding:7px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);max-width:100%}
+/* Mistakes / history lists (rendered by renderReview()). */
 .rhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
 .rlist{list-style:none;margin:8px 0;padding:0;display:grid;gap:2px}
 .rlist li{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px dashed var(--line)}
@@ -64,13 +114,28 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
 </head>
 <body>
 <main>
-  <header>
-    <h1>Say the Sum</h1>
-    <p class="sub">Listen to the question, say the answer out loud.</p>
+  <!-- Header: title and theme picker (the theme is applied by applyTheme() in the script). -->
+  <header class="top">
+    <div>
+      <h1>Say the Sum</h1>
+      <p class="sub">Listen to the question, say the answer out loud.</p>
+    </div>
+    <label class="themepick">Theme
+      <select id="theme">
+        <option value="auto">Auto (device)</option>
+        <option value="light">Notebook</option>
+        <option value="dark">Dark</option>
+        <option value="forest">Forest</option>
+        <option value="sunset">Sunset</option>
+        <option value="candy">Candy</option>
+        <option value="night">Night</option>
+      </select>
+    </label>
   </header>
 
+  <!-- STAGE: countdown ring, the question, the status/result text, the heard text, the typing box and the buttons. -->
   <section class="card stage" aria-live="polite">
-    <div class="timer" id="timer"><svg width="96" height="96" viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="42"/><circle class="fg" id="fg" cx="48" cy="48" r="42" stroke-dasharray="264" stroke-dashoffset="0"/></svg><b id="secs">30</b></div>
+    <div class="timer" id="timer"><svg width="96" height="96" viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="42"/><circle class="fg" id="fg" cx="48" cy="48" r="42" stroke-dasharray="264" stroke-dashoffset="0"/></svg><b id="secs">20</b></div>
     <div class="q" id="q">Ready?</div>
     <div class="status" id="status">Press Start. Your browser will ask to use the microphone.</div>
     <div class="heard"><span class="mic" id="mic"></span><span id="heard"></span></div>
@@ -85,12 +150,14 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     </div>
   </section>
 
+  <!-- SCORE for the current session (updated by updateScore()). -->
   <section class="card score">
     <div><strong id="sCorrect">0</strong>correct</div>
     <div><strong id="sWrong">0</strong>wrong</div>
     <div><strong id="sStreak">0</strong>streak</div>
   </section>
 
+  <!-- MISTAKES: wrong answers saved in localStorage; "Practise mistakes" quizzes only these (see renderReview()). -->
   <section class="card" id="reviewCard">
     <div class="rhead"><strong id="rTitle">Mistakes to review</strong><span class="note" id="rStats" style="margin:0"></span></div>
     <ul class="rlist" id="rList"></ul>
@@ -102,49 +169,78 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     <details><summary>Recent answers</summary><ul class="rlist" id="hList"></ul></details>
   </section>
 
+  <!-- SETTINGS: operation rows are generated by the script (see OPS). Everything else is under Advanced options. -->
   <section class="card">
     <div class="ops" id="ops"></div>
-    <div class="extra">
-      <label for="recmode">Voice recognition</label>
-      <select id="recmode">
-        <option value="browser">Browser (Chrome may use Google servers)</option>
-        <option value="offline">Offline model (private, about 40 MB download)</option>
-        <option value="none">Off (type answers)</option>
-      </select>
-    </div>
-    <p class="note" id="privNote"></p>
-    <div class="extra">
-      <label for="tlimit">Seconds per question</label>
-      <input type="number" id="tlimit" min="5" max="120" value="30">
-    </div>
-    <div class="extra">
-      <input type="checkbox" id="noneg" checked style="width:20px;height:20px;accent-color:var(--accent)">
-      <label for="noneg">No negative answers in subtraction</label>
-    </div>
+    <!-- ADVANCED OPTIONS (collapsed by default): recognition mode, seconds per question, streak length, negatives. -->
+    <details id="adv">
+      <summary>Advanced options</summary>
+      <div class="extra">
+        <label for="recmode">Voice recognition</label>
+        <select id="recmode">
+          <option value="offline">Offline model (private, about 40 MB download)</option>
+          <option value="browser">Browser (Chrome may use Google servers)</option>
+          <option value="none">Off (type answers)</option>
+        </select>
+      </div>
+      <p class="note" id="privNote"></p>
+      <p class="note" id="recNote"></p>
+      <div class="extra">
+        <label for="tlimit">Seconds per question</label>
+        <input type="number" id="tlimit" min="5" max="120" value="20">
+      </div>
+      <div class="extra">
+        <label for="streaklen">Praise after this many correct in a row (0 = off)</label>
+        <input type="number" id="streaklen" min="0" max="50" value="5">
+      </div>
+      <div class="extra">
+        <input type="checkbox" id="noneg" checked style="width:20px;height:20px;accent-color:var(--accent)">
+        <label for="noneg">No negative answers in subtraction</label>
+      </div>
+      <p class="note" id="voiceNote"></p>
+      <p class="note" id="support"></p>
+    </details>
     <div class="extra">
       <button id="reset">Reset to defaults</button>
       <span class="note" style="margin:0">Settings are saved in this browser.</span>
     </div>
-    <p class="note" id="voiceNote"></p>
-    <p class="note" id="recNote"></p>
-    <p class="note" id="support"></p>
   </section>
 </main>
 
 <script>
 (function(){
+  // =====================================================================
+  // SCRIPT OVERVIEW. Everything lives inside this one function so nothing leaks into the page.
+  // Sections below, in order: settings UI, saved settings, history/mistakes, question generation,
+  // speech output, beep, speech-to-number, recognition, offline recognition, timer, game flow, start-up.
+  // =====================================================================
+  //
+  // Operation definitions. Fields: id (used in element ids), sym (shown on screen), say (spoken),
+  // name (label), on (enabled by default), min/max (default number range).
+  // To add an operation: add it here AND add a branch in makeQuestion().
   var OPS=[
     {id:'add',sym:'+',say:'plus',name:'Addition',on:false,min:1,max:15},
     {id:'sub',sym:'−',say:'minus',name:'Subtraction',on:true,min:1,max:15},
     {id:'mul',sym:'×',say:'times',name:'Multiplication',on:false,min:1,max:15},
     {id:'div',sym:'÷',say:'divided by',name:'Division',on:false,min:1,max:15}
   ];
+  // Shortcut for document.getElementById.
   var $=function(id){return document.getElementById(id)};
+  // Console logger: prefixes every message with [SayTheSum +seconds]. Filter the console by "SayTheSum".
   var T0=Date.now();
   function log(){var a=['[SayTheSum +'+((Date.now()-T0)/1000).toFixed(2)+'s]'].concat([].slice.call(arguments));console.log.apply(console,a)}
+  // Browser speech APIs: synth = text-to-speech, SR = Web Speech recognition class (undefined if the browser has none).
   var synth=window.speechSynthesis;
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  // Shared state:
+  //   running  true while a quiz is active
+  //   qid      counter that increases for every question; delayed callbacks compare it to ignore stale questions
+  //   current  the current question: {text, spoken, ans}
+  //   timerId / deadline   countdown interval and its end time
+  //   rec / recWanted      the browser (Web Speech) recognition object and whether it should keep restarting
+  //   limit    seconds per question for the running quiz
   var running=false,qid=0,current=null,timerId=null,deadline=0,rec=null,recWanted=false,limit=30;
+  // Score of the current session only. All-time totals are kept in `hist` further down.
   var score={c:0,w:0,s:0};
 
   // ----- settings UI -----
@@ -156,6 +252,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       '<span class="t">to</span><input type="number" id="max_'+o.id+'" value="'+o.max+'" aria-label="'+o.name+' maximum">';
     opsBox.appendChild(d);
   });
+  // Reads the operation rows and returns [{op,min,max}] for the enabled operations (swaps min/max if entered the wrong way round).
   function cfg(){
     var list=[];
     OPS.forEach(function(o){
@@ -166,18 +263,29 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     });
     return list;
   }
+  // Random whole number between a and b, both included.
   function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a}
 
   // ----- saved settings (localStorage) -----
-  var KEY='saythesum.settings.v1',DEF_TIME=30,DEF_NONEG=true,DEF_REC='browser';
+  // KEY = localStorage key for settings. DEF_* = default values (also used by "Reset to defaults").
+  // THEMES = valid theme names; they must match the <option> values and the CSS [data-theme] blocks.
+  var KEY='saythesum.settings.v1',DEF_TIME=20,DEF_NONEG=true,DEF_REC='offline',DEF_STREAK=5,DEF_THEME='auto',THEMES=['auto','light','dark','forest','sunset','candy','night'];
+  // Applies the chosen theme by setting data-theme on <html>. "auto" removes it so the device setting decides.
+  function applyTheme(){
+    var v=$('theme').value;
+    if(v==='auto')document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme',v);
+  }
+  // Writes all settings to localStorage. `v:2` marks the settings format (older saves without it lose the recognition and time defaults on load).
   function saveSettings(){
     try{
-      var o={time:$('tlimit').value,noneg:$('noneg').checked,rec:$('recmode').value,ops:{}};
+      var o={v:2,time:$('tlimit').value,noneg:$('noneg').checked,rec:$('recmode').value,streak:$('streaklen').value,theme:$('theme').value,ops:{}};
       OPS.forEach(function(x){o.ops[x.id]={on:$('on_'+x.id).checked,min:$('min_'+x.id).value,max:$('max_'+x.id).value}});
       localStorage.setItem(KEY,JSON.stringify(o));
       log('settings saved',JSON.stringify(o));
     }catch(e){log('could not save settings:',e)}
   }
+  // Puts a settings object into the form controls; missing or invalid values fall back to the DEF_* defaults. applySettings(null) = reset to defaults.
   function applySettings(o){
     OPS.forEach(function(x){
       var v=o&&o.ops&&o.ops[x.id];
@@ -189,36 +297,51 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     $('noneg').checked=o&&typeof o.noneg==='boolean'?o.noneg:DEF_NONEG;
     var rv=o&&o.rec;
     $('recmode').value=(rv==='browser'||rv==='offline'||rv==='none')?rv:DEF_REC;
+    $('streaklen').value=o&&isFinite(parseInt(o.streak,10))?parseInt(o.streak,10):DEF_STREAK;
+    var tv=o&&o.theme;
+    $('theme').value=(THEMES.indexOf(tv)>=0)?tv:DEF_THEME;
+    applyTheme();
     updatePrivacy();
   }
+  // Reads settings from localStorage at start-up (safe if storage is blocked).
   function loadSettings(){
     try{
       var raw=localStorage.getItem(KEY);
-      if(raw){applySettings(JSON.parse(raw));log('settings loaded from this browser',raw)}
+      if(raw){var so=JSON.parse(raw);if(so.v!==2){delete so.rec;delete so.time}applySettings(so);log('settings loaded from this browser',raw)}
       else log('no saved settings; using defaults');
     }catch(e){log('could not load settings:',e)}
   }
+  // "Reset to defaults" button: clears the saved settings and re-applies the defaults.
   function resetSettings(){
     try{localStorage.removeItem(KEY)}catch(e){}
     applySettings(null);
     log('settings reset to defaults');
   }
   loadSettings();
-  ['ops','tlimit','noneg','recmode'].forEach(function(id){
+  // Save settings whenever any of these controls changes. Add the id of a new setting control here.
+  ['ops','tlimit','noneg','recmode','streaklen','theme'].forEach(function(id){
     $(id).addEventListener('input',saveSettings);
     $(id).addEventListener('change',saveSettings);
   });
   $('reset').onclick=resetSettings;
 
   // ----- answer history & mistakes (localStorage) -----
+  // History data kept in localStorage:
+  //   log    the last 300 answers: {q, ans, said, ok, t}
+  //   wrong  mistakes to review, keyed by question text: {text, spoken, ans, n (times wrong), said, t}
+  //   tot    all-time totals {c: correct, w: wrong}
+  // practice = true while "Practise mistakes" is running; pendingPractice carries the choice into the Start handler.
   var HKEY='saythesum.history.v1',hist={log:[],wrong:{},tot:{c:0,w:0}},practice=false,pendingPractice=false;
+  // Loads the history from localStorage (keeps the empty default if nothing valid is stored).
   function loadHist(){
     try{
       var r=localStorage.getItem(HKEY);
       if(r){var o=JSON.parse(r);if(o&&o.log&&o.wrong&&o.tot){hist=o;log('history loaded:',hist.tot.c,'right,',hist.tot.w,'wrong,',Object.keys(hist.wrong).length,'to review')}}
     }catch(e){log('could not load history:',e)}
   }
+  // Saves the history to localStorage.
   function saveHist(){try{localStorage.setItem(HKEY,JSON.stringify(hist))}catch(e){log('could not save history:',e)}}
+  // Called by finish() for every answer: appends to the log, updates totals, and adds/removes the question in the mistakes list (a correct answer removes it).
   function recordAnswer(ok,said){
     var q=current;if(!q)return;
     hist.log.push({q:q.text,ans:q.ans,said:said,ok:ok,t:Date.now()});
@@ -232,16 +355,20 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     saveHist();renderReview();
     log('recorded:',q.text,'=',q.ans,'| said',said,'|',ok?'right':'wrong','| mistakes to review:',Object.keys(hist.wrong).length);
   }
+  // Human-readable text for what the player said ("said 7", "ran out of time", "skipped").
   function saidText(x){return x==='timeout'?'ran out of time':x==='skipped'?'skipped':'said '+x}
+  // Builds one list row (left text, right text, optional css class) using textContent, so stored text is never treated as HTML.
   function li(l,r,cls){
     var e=document.createElement('li'),a=document.createElement('span'),b=document.createElement('span');
     a.textContent=l;b.textContent=r;if(cls)b.className=cls;e.appendChild(a);e.appendChild(b);return e;
   }
+  // Replaces the contents of a list; shows `empty` text when there are no items.
   function fillList(ul,items,empty){
     ul.innerHTML='';
     if(!items.length){ul.appendChild(li(empty,''));return}
     items.forEach(function(x){ul.appendChild(x)});
   }
+  // Redraws the mistakes card: title count, all-time stats, mistakes list, last 10 answers; enables/disables the Practise button.
   function renderReview(){
     var ws=Object.keys(hist.wrong).map(function(k){return hist.wrong[k]}).sort(function(a,b){return b.t-a.t});
     var tot=hist.tot.c+hist.tot.w;
@@ -251,6 +378,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     fillList($('hList'),hist.log.slice(-10).reverse().map(function(h){return li(h.q+' = '+h.ans,h.ok?'\u2713 right':'\u2717 '+saidText(h.said),h.ok?'ok':'x')}),'No answers yet.');
     $('practice').disabled=running||!ws.length;
   }
+  // Makes a button need two clicks within 4 seconds (used for the clear buttons; avoids confirm() which can be blocked).
   function twoStep(btn,fn){
     var label=btn.textContent,tm=null;
     btn.onclick=function(){
@@ -261,10 +389,15 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   }
   twoStep($('clearMist'),function(){hist.wrong={};saveHist();renderReview();log('mistakes list cleared')});
   twoStep($('clearHist'),function(){hist={log:[],wrong:{},tot:{c:0,w:0}};saveHist();renderReview();log('all history cleared')});
+  // "Practise mistakes": remember the choice, then press Start (the Start handler reads pendingPractice).
   $('practice').onclick=function(){pendingPractice=true;$('start').click()};
   loadHist();renderReview();
 
   // ----- question generation -----
+  // Builds the next question: {text (shown), spoken (read aloud), ans (number)}.
+  // In practice mode it picks a saved mistake (not the same one twice in a row); otherwise a random enabled operation.
+  // Subtraction can avoid negative answers by swapping the numbers; division is built as answer x divisor so it is always a whole number.
+  // Returns null when nothing can be asked (no operation enabled / no mistakes left).
   function makeQuestion(){
     if(practice){
       var ks=Object.keys(hist.wrong);
@@ -284,19 +417,23 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   }
 
   // ----- speech output (on-device voices only) -----
+  // Speech output uses ONLY on-device voices (localService), so questions are never sent to an online voice.
   var voice=null;
+  // Chooses an on-device English voice, preferring en-US. Returns null if there is none.
   function pickVoice(){
     if(!synth)return null;
     var en=synth.getVoices().filter(function(v){return v.localService&&/^en/i.test(v.lang)});
     for(var i=0;i<en.length;i++)if(/en[-_]US/i.test(en[i].lang))return en[i];
     return en[0]||null;
   }
+  // Re-picks the voice and shows which one is used. Voices load asynchronously, so this also runs on voiceschanged.
   function refreshVoice(){
     voice=pickVoice();
     log('voices: total',synth?synth.getVoices().length:0,'| on-device',synth?synth.getVoices().filter(function(v){return v.localService}).length:0,'| chosen:',voice?voice.name+' ('+voice.lang+')':'none');
     $('voiceNote').textContent=voice?('Voice: '+voice.name+' (on this device).'):'No on-device English voice found, so questions are shown but not spoken. Install an English voice in your system settings.';
   }
   if(synth)synth.onvoiceschanged=refreshVoice;
+  // Reads `text` aloud, then calls done(). If no voice is available it just waits briefly so the quiz still works; a 9 s timer is a safety net if the browser never fires "end".
   function speak(text,done){
     var fired=false;function fin(){if(fired)return;fired=true;done()}
     if(!synth||!voice){log('speech skipped (no on-device voice):',JSON.stringify(text));setTimeout(fin,700);return}
@@ -314,7 +451,9 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   }
 
   // ----- beep (generated locally with Web Audio) -----
+  // Beep played after each question as the signal to start talking; generated with the Web Audio API (no audio file, works offline).
   var actx=null;
+  // Creates/resumes the audio context. Must run from a click (Start button) because browsers block audio until the user interacts.
   function initAudio(){
     try{
       var AC=window.AudioContext||window.webkitAudioContext;
@@ -322,6 +461,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       if(actx&&actx.state==='suspended')actx.resume();
     }catch(e){log('audio init failed:',e)}
   }
+  // Plays a short 880 Hz tone with a quick fade in/out.
   function beep(){
     log('beep');
     if(!actx)return;
@@ -337,9 +477,11 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   }
 
   // ----- speech to number -----
+  // Number words for parseNumber(). HOMO lists words that sound like numbers (to, for, ate...); they are only accepted when the reply is very short.
   var UNITS={zero:0,oh:0,one:1,won:1,two:2,to:2,too:2,three:3,four:4,for:4,five:5,six:6,seven:7,eight:8,ate:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19};
   var TENS={twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
   var HOMO={oh:1,won:1,to:1,too:1,for:1,ate:1};
+  // Turns recognised text into a number: understands digits, "twenty one", "minus 3", "one hundred forty four". Returns the LAST number found (so corrections work) or null.
   function parseNumber(text){
     text=text.toLowerCase().replace(/(^|\s)[-\u2212](?=\d)/g,' minus ').replace(/-/g,' ').replace(/[,.?!]/g,' ');
     var w=text.split(/\s+/).filter(Boolean),strict=w.length>2,out=null,neg=false,base=null;
@@ -362,6 +504,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     return out;
   }
   // remove the spoken question if the microphone picked it up
+  // Removes things the microphone may have picked up from the speaker (the question "what is 10 minus 2", feedback words like "wrong, the answer is 5") so only the player's answer remains.
   function stripEcho(t){
     t=t.toLowerCase();
     t=t.replace(/\b(?:wrong|correct|skipped|time(?:'s| is) up)\b\W*(?:the )?(?:answer is (?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+(?:one|two|three|four|five|six|seven|eight|nine)|\S+))?/g,' ');
@@ -371,21 +514,36 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   }
 
   // ----- recognition (one continuous session, on-device when the browser allows) -----
+  // Recognition state: listening = answers are being accepted now; lastFinal/ignoreBefore = index bookkeeping for the browser recognizer;
+  // localRec = on-device mode of the browser recognizer is active; pend = timer used to confirm an early correct answer.
   var listening=false,lastFinal=0,ignoreBefore=0,localRec=false,pend=null;
-  var recMode='browser'; // browser | offline | none (chosen at Start)
+  // recMode is chosen at Start from the settings: offline | browser | none.
+  var recMode='offline'; // browser | offline | none (chosen at Start)
+  // streakLen = praise every N correct answers in a row (0 = off); PRAISE = phrases picked at random.
+  var streakLen=5,PRAISE=['Awesome!','Fantastic!','Brilliant!','Superstar!','Great going!'];
+  // When true (served over http/https) a NEW browser recognition session is opened for every question, which avoids leftover audio. On file:// one session is reused to avoid repeated mic prompts.
   var freshSessions=location.protocol!=='file:'; // new recognition session per question (no repeated prompts off file://)
+  // Shows/hides the pulsing red dot depending on whether anything is listening.
   function setMic(){$('mic').classList.toggle('on',listening&&(!!rec||!!vRec))}
+  // Updates the small note under the recognition setting (offline model status, or browser on-device status).
   function setRecNote(){
-    if(!SR||recMode!=='browser'){$('recNote').textContent='';return}
+    var m=$('recmode').value;
+    if(m==='offline'){$('recNote').textContent=vModel?'Offline model: ready.':(modelErr?'Offline model problem: '+modelErr:'Offline model: loading in the background\u2026');return}
+    if(!SR||m!=='browser'){$('recNote').textContent='';return}
     $('recNote').textContent=localRec?'Recognition: on this device.':'Recognition: on-device mode is not available in this browser, so it may use an online service.';
   }
   // ----- offline recognition (Vosk speech model running inside this page) -----
+  // OFFLINE RECOGNITION (Vosk compiled to WebAssembly, runs inside this page, nothing is sent anywhere).
+  // VOSK_SRC = the library (pinned version). MODEL_URLS = where to get the speech model; the first entry is a file next to this page,
+  // the second is a public copy. GRAMMAR restricts recognition to number words, which makes it much more accurate for this quiz.
   var VOSK_SRC='https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js';
   // Put vosk-model-small-en-us-0.15.tar.gz next to this page to serve the model yourself (first entry).
   var MODEL_URLS=['vosk-model-small-en-us-0.15.tar.gz','https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-en-us-0.15.tar.gz'];
   var GRAMMAR=JSON.stringify(['zero','oh','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety','hundred','minus','negative','[unk]']);
   var vModel=null,vStream=null,vCtx=null,vNode=null,vSrc=null,vRec=null;
+  // True when some kind of voice recognition is available in the chosen mode (used to pick the on-screen hint text).
   function canListen(){return recMode==='offline'||(recMode==='browser'&&!!SR)}
+  // Writes the privacy note that matches the selected recognition mode.
   function updatePrivacy(){
     var m=$('recmode').value,t;
     if(m==='offline')t='Privacy: answers are recognised on this device by an offline model, so your voice is not sent anywhere. The model (about 40 MB) is downloaded once from this site or the vosk-browser demo site; only the model file is downloaded, never your audio.';
@@ -393,7 +551,10 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     else t='Privacy: the browser\u2019s speech recognition is used. In Chrome this usually sends your voice to Google\u2019s servers, and it is not clear how Google keeps or uses it. If children use this app, choose the offline model or typing.';
     $('privNote').textContent=t+' Questions are read with on-device voices only. Settings and results stay in this browser and this app sends nothing to any server.';
   }
-  $('recmode').addEventListener('change',updatePrivacy);
+  $('recmode').addEventListener('change',function(){updatePrivacy();setRecNote();preloadModel()});
+  $('theme').addEventListener('change',applyTheme);
+  $('tlimit').addEventListener('input',function(){if(!running)$('secs').textContent=parseInt(this.value,10)||DEF_TIME});
+  // Loads the Vosk library on demand (only when the offline mode is used).
   function loadScript(src){
     return new Promise(function(ok,fail){
       if(window.Vosk){ok();return}
@@ -402,6 +563,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       document.head.appendChild(el);
     });
   }
+  // Tries each model location in order (HEAD request) and returns the first one that exists.
   function pickModelUrl(){
     var i=0;
     function next(){
@@ -414,40 +576,58 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     }
     return next();
   }
-  function prepareOffline(){
-    var p=Promise.resolve();
-    if(!vModel){
-      p=loadScript(VOSK_SRC).then(function(){
-        $('status').textContent='Loading the offline speech model (about 40 MB, first time only)\u2026';
-        return pickModelUrl();
-      }).then(function(url){
-        return Vosk.createModel(url).catch(function(){throw new Error('the offline model could not be loaded')});
-      }).then(function(m){vModel=m;log('offline model ready')});
-    }
-    return p.then(function(){
-      if(vStream)return;
-      return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}}).then(function(st){
-        vStream=st;
-        vCtx=new (window.AudioContext||window.webkitAudioContext)();
-        if(vCtx.state==='suspended')vCtx.resume();
-        vSrc=vCtx.createMediaStreamSource(st);
-        vNode=vCtx.createScriptProcessor(4096,1,1);
-        vNode.onaudioprocess=function(e){if(vRec){try{vRec.acceptWaveform(e.inputBuffer)}catch(err){}}};
-        vSrc.connect(vNode);vNode.connect(vCtx.destination);
-        log('offline microphone open | sample rate',vCtx.sampleRate);
-      });
+  // vModelP = promise of the loading model (so it loads only once); modelErr = last error text; recReady = promise the quiz waits for before beeping.
+  var vModelP=null,modelErr='',recReady=Promise.resolve();
+  // Loads library + model once and caches the promise. On failure the promise is cleared so a later Start can retry.
+  function loadModelOnce(){
+    if(vModelP)return vModelP;
+    vModelP=loadScript(VOSK_SRC).then(pickModelUrl).then(function(url){
+      return Vosk.createModel(url).catch(function(){throw new Error('the offline model could not be loaded')});
+    }).then(function(m){
+      vModel=m;modelErr='';log('offline model ready');setRecNote();return m;
+    }).catch(function(e){
+      vModelP=null;modelErr=(e&&e.message)||'unknown error';setRecNote();throw e;
+    });
+    return vModelP;
+  }
+  // Opens the microphone once and feeds its audio to the active recognizer (vRec) through a ScriptProcessor node. Audio is only passed on while a recognizer exists.
+  function openMic(){
+    if(vStream)return Promise.resolve();
+    return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}}).then(function(st){
+      vStream=st;
+      vCtx=new (window.AudioContext||window.webkitAudioContext)();
+      if(vCtx.state==='suspended')vCtx.resume();
+      vSrc=vCtx.createMediaStreamSource(st);
+      vNode=vCtx.createScriptProcessor(4096,1,1);
+      vNode.onaudioprocess=function(e){if(vRec){try{vRec.acceptWaveform(e.inputBuffer)}catch(err){}}};
+      vSrc.connect(vNode);vNode.connect(vCtx.destination);
+      log('offline microphone open | sample rate',vCtx.sampleRate);
     });
   }
+  // Everything the offline mode needs: model loaded + microphone open.
+  function prepareOffline(){return loadModelOnce().then(openMic)}
+  // start downloading/loading the model as soon as the page opens, so the first question is not delayed
+  // Starts loading the model as soon as the page opens, so the first question is not delayed.
+  function preloadModel(){
+    if($('recmode').value!=='offline'||vModel||vModelP)return;
+    log('preloading offline model in the background');
+    setRecNote();
+    loadModelOnce().catch(function(){});
+  }
+  // If the offline mode cannot start, switch to typing for this session (never silently to an online recognizer).
+  function offlineFallback(err){
+    log('offline recognition failed:',err&&err.message||err);
+    recMode='none';
+    $('typedRow').hidden=false;
+    $('status').textContent='Offline recognition is not available ('+(err&&err.message||'unknown error')+'). Type your answers instead.';
+  }
+  // Starts preparing in the background and returns immediately: the first question is spoken while the model/microphone get ready.
   function startOffline(cb){
-    $('status').textContent='Preparing offline recognition\u2026';
-    prepareOffline().then(function(){setRecNote();cb()}).catch(function(err){
-      log('offline recognition failed:',err&&err.message||err);
-      recMode='none';
-      $('typedRow').hidden=false;
-      $('status').textContent='Offline recognition is not available ('+(err&&err.message||'unknown error')+'). Type your answers instead.';
-      cb();
-    });
+    // do not wait: the first question is spoken while the model and microphone get ready
+    recReady=prepareOffline().then(function(){setRecNote()}).catch(offlineFallback);
+    cb();
   }
+  // Creates a fresh recognizer for the current question and wires its result events to offlineHeard().
   function offlineBegin(){
     if(!vModel||!vCtx)return;
     offlineEnd();
@@ -457,9 +637,11 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     vRec.on('error',function(m){log('offline recognizer error:',m&&m.error)});
     log('offline recognizer started');
   }
+  // Removes the current recognizer (done after every question).
   function offlineEnd(){
     if(vRec){try{vRec.remove()}catch(e){}vRec=null;log('offline recognizer stopped')}
   }
+  // Releases the recognizer, microphone and audio context (called when the quiz stops).
   function offlineClose(){
     offlineEnd();
     try{if(vNode){vNode.onaudioprocess=null;vNode.disconnect()}}catch(e){}
@@ -468,6 +650,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     try{if(vCtx)vCtx.close()}catch(e){}
     vNode=vSrc=vStream=vCtx=null;
   }
+  // Handles text from the offline recognizer. Final result: judge immediately. Partial result that is already correct: confirm after 650 ms of stability.
   function offlineHeard(text,isFinal){
     if(!listening||!current||settled)return;
     text=(text||'').trim();
@@ -487,6 +670,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     }
   }
 
+  // Prepares the chosen recognition mode at Start, then calls cb() to begin the quiz. "none" = typing only; "offline" = Vosk; otherwise the browser recognizer (asking for on-device mode if Chrome supports it).
   function prepareRec(cb){
     if(recMode==='none'){log('recognition off: typing only');setRecNote();cb();return}
     if(recMode==='offline'){startOffline(cb);return}
@@ -502,6 +686,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       }else done(false);
     }).catch(function(){done(false)});
   }
+  // Takes a recognition result (with its alternatives), cleans each with stripEcho(), parses a number, and reports {heard, num, hit} where hit = matches the expected answer.
   function evalResult(res){
     var heard='',num=null;
     for(var k=0;k<res.length;k++){
@@ -513,6 +698,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     }
     return{heard:heard,num:num,hit:false};
   }
+  // Starts the browser (Web Speech) recognizer if it is not running. It restarts itself on end while the quiz runs.
   function ensureRec(){
     if(recMode!=='browser'||!SR||rec)return;
     recWanted=true;
@@ -526,6 +712,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       r.onspeechstart=function(){log('speech detected')};
       r.onspeechend=function(){log('speech stopped')};
       r.onnomatch=function(){log('recognition: no match')};
+      // Handles browser recognition results: ignore anything while not listening; a final result is judged immediately; an early partial that already matches is confirmed after 650 ms.
       r.onresult=function(e){
         for(var i=e.resultIndex;i<e.results.length;i++){
           var res=e.results[i];
@@ -548,6 +735,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
           }
         }
       };
+      // Microphone blocked -> fall back to typing; on-device language missing -> use the normal mode.
       r.onerror=function(e){
         log('recognition ERROR:',e.error,e.message||'');
         if(e.error==='not-allowed'||e.error==='service-not-allowed'){
@@ -558,6 +746,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
           localRec=false;setRecNote();
         }
       };
+      // Browsers end sessions after silence; restart quickly so no speech is lost.
       r.onend=function(){
         rec=null;setMic();
         log('recognition session ended',recWanted&&running?'(restarting)':'(not restarting)');
@@ -567,12 +756,14 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       r.start();
     }catch(err){log('could not start recognition:',err);rec=null}
   }
+  // Aborts the browser recognizer without triggering its auto-restart.
   function killRec(why){
     if(!rec)return;
     var o=rec;rec=null;
     try{o.onend=o.onresult=o.onerror=o.onstart=null;o.abort()}catch(e){}
     log('closed recognition session ('+why+')');
   }
+  // Starts accepting answers for the current question (called right after the beep).
   function beginListen(){
     if(recMode!=='browser'){
       listening=true;
@@ -588,13 +779,16 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     setMic();
     log('listening ON | ignoring results before #'+ignoreBefore,'| fresh session:',freshSessions,'| session active:',!!rec);
   }
+  // Stops accepting answers (called as soon as a question is judged).
   function endListen(){if(listening)log('listening OFF');clearTimeout(pend);listening=false;offlineEnd();setMic()}
+  // Fully stops recognition and releases the microphone (called when the quiz stops).
   function stopRec(){
     clearTimeout(pend);recWanted=false;listening=false;offlineClose();setMic();
     if(rec){try{rec.onend=null;rec.abort()}catch(e){}rec=null}
   }
 
   // ----- timer -----
+  // Countdown for one question. When it reaches 0 it calls timeUp(). `id` guards against a stale timer from an earlier question.
   function startTimer(id){
     deadline=Date.now()+limit*1000;
     clearInterval(timerId);
@@ -606,6 +800,7 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     },200);
     showTime(limit);
   }
+  // Updates the number and the ring; the ring turns red in the last 5 seconds.
   function showTime(left){
     $('secs').textContent=Math.ceil(left);
     $('fg').style.strokeDashoffset=264*(1-left/limit);
@@ -613,6 +808,8 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   }
 
   // ----- game flow -----
+  // Asks the next question: build it, show it, speak it, then (after a short pause) wait until recognition is ready,
+  // play the beep and start the timer and listening. `id` lets old callbacks detect that a newer question has started.
   function nextQuestion(){
     if(!running)return;
     var q=makeQuestion();
@@ -629,13 +826,19 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
       $('status').textContent=canListen()?'Say your answer after the beep.':'Type your answer and press Answer.';
       setTimeout(function(){
         if(id!==qid||!running)return;
-        log('question finished; beep, then timer and listening');
+        if(recMode==='offline'&&!(vModel&&vStream))$('status').textContent='Getting the voice model ready\u2026';
+        log('question finished; waiting for recognition to be ready, then beep');
+        return recReady.then(function(){if(id!==qid||!running)return;
         beep();startTimer(id);beginListen();
         $('status').textContent=canListen()?'Listening… say your answer now.':'Type your answer and press Answer.';
+        });
       },250);
     });
   }
+  // settled = the current question has already been judged (blocks double judging while feedback is spoken).
   var settled=false;
+  // Ends the current question exactly once: records it, stops listening, updates the score, shows the (large) result text,
+  // adds the streak praise when streakLen is reached, speaks the feedback, then continues with the next question.
   function finish(id,ok,msg,spoken,said){
     if(id!==qid||!running||settled)return;
     settled=true;
@@ -645,17 +848,27 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     if(ok){score.c++;score.s++}else{score.w++;score.s=0}
     updateScore();
     log('score: correct',score.c,'wrong',score.w,'streak',score.s);
+    if(ok&&streakLen>0&&score.s%streakLen===0){
+      var pr=PRAISE[rnd(0,PRAISE.length-1)];
+      msg=msg+' \ud83d\udd25 '+score.s+' in a row! '+pr;
+      spoken='Correct! '+score.s+' in a row. '+pr;
+      log('streak praise at',score.s);
+    }
     $('status').className='status '+(ok?'ok':'bad');
     $('status').textContent=msg;
     speak(spoken,function(){settled=false;if(running)setTimeout(nextQuestion,500)});
   }
+  // Compares the number the player gave with the expected answer and finishes the question.
   function judge(id,n){
     log('judge: heard',n,'| expected',current&&current.ans,'|',current&&n===current.ans?'CORRECT':'WRONG');
     if(n===current.ans)finish(id,true,'Correct! '+current.text+' = '+current.ans,'Correct!',n);
     else finish(id,false,'Wrong. The answer is '+current.ans,'Wrong. The answer is '+current.ans,n);
   }
+  // Called by the timer when time runs out.
   function timeUp(id){log('time is up');finish(id,false,'Time’s up. The answer is '+current.ans,'Time is up. The answer is '+current.ans,'timeout')}
+  // Shows the session score (correct / wrong / current streak).
   function updateScore(){$('sCorrect').textContent=score.c;$('sWrong').textContent=score.w;$('sStreak').textContent=score.s}
+  // Stops everything: timers, speech, recognition and microphone, and resets the buttons.
   function stopAll(){
     log('stopping everything');
     practice=false;running=false;qid++;settled=false;clearInterval(timerId);stopRec();if(synth)synth.cancel();
@@ -663,10 +876,12 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     renderReview();
   }
 
+  // START button: reads the settings, selects the recognition mode and streak length, resets the session score, then starts the first question.
   $('start').onclick=function(){
     practice=pendingPractice;pendingPractice=false;
-    recMode=$('recmode').value;
-    limit=Math.min(120,Math.max(5,parseInt($('tlimit').value,10)||30));
+    recMode=$('recmode').value;recReady=Promise.resolve();
+    var sl=parseInt($('streaklen').value,10);streakLen=isFinite(sl)&&sl>0?sl:0;
+    limit=Math.min(120,Math.max(5,parseInt($('tlimit').value,10)||DEF_TIME));
     score={c:0,w:0,s:0};updateScore();
     running=true;settled=false;refreshVoice();initAudio();
     log('Start pressed | seconds per question:',limit,'| operations:',JSON.stringify(cfg().map(function(c){return c.op.name+' '+c.min+'-'+c.max})),'| no negatives:',$('noneg').checked);
@@ -675,8 +890,11 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
     $('typedRow').hidden=false;
     prepareRec(function(){if(!running)return;ensureRec();nextQuestion()});
   };
+  // STOP button.
   $('stop').onclick=function(){log('Stop pressed');stopAll();$('q').textContent='Stopped';$('status').className='status';$('status').textContent='Score: '+score.c+' correct, '+score.w+' wrong.';showTime(limit)};
+  // SKIP button: counts as a wrong answer and shows the correct one.
   $('skip').onclick=function(){log('Skip pressed');if(running&&current&&!settled)finish(qid,false,'Skipped. The answer is '+current.ans,'The answer is '+current.ans,'skipped')};
+  // Typed answer (fallback when the microphone cannot be used, also handy for testing).
   $('submitTyped').onclick=function(){
     var v=parseInt($('typed').value,10);
     log('typed answer:',v);
@@ -684,10 +902,13 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--mute)}
   };
   $('typed').addEventListener('keydown',function(e){if(e.key==='Enter')$('submitTyped').click()});
 
+  // START-UP: show browser support notes, apply the initial state and begin preloading the offline model.
   $('support').textContent=(!synth?'Speech synthesis is not supported in this browser. ':'')+(!SR?'Speech recognition is not supported here, so type your answers. ':'Voice answers work best in recent Chrome or Edge. ')+'If Chrome keeps asking for the microphone when you open this as a local file, run python3 -m http.server in its folder and open http://localhost:8000.';
   if(!SR)$('typedRow').hidden=false;
   if(synth)refreshVoice();
   updatePrivacy();
+  $('secs').textContent=Math.min(120,Math.max(5,parseInt($('tlimit').value,10)||DEF_TIME));
+  setRecNote();preloadModel();
   log('ready | speechSynthesis:',!!synth,'| speechRecognition:',!!SR,'| secure context:',window.isSecureContext,'| protocol:',location.protocol,'| fresh recognition session per question:',freshSessions,'| filter this console by "SayTheSum"');
   try{navigator.permissions.query({name:'microphone'}).then(function(pm){log('microphone permission:',pm.state);pm.onchange=function(){log('microphone permission changed:',pm.state)}}).catch(function(){})}catch(e){}
 })();
